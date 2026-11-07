@@ -1,0 +1,138 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Banner</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-content: center; gap: 12px; background: #0d1117; color: #9198a1; font: 13px system-ui, sans-serif; }
+  #out { width: min(calc(100vw - 32px), 1200px); height: auto; }
+  .ui { display: flex; gap: 12px; align-items: center; }
+  #scrub { width: 360px; }
+</style>
+<canvas id="out"></canvas>
+<div class="ui">
+  <button id="play">Pause</button>
+  <input id="scrub" type="range" min="0" max="10" step="0.01" value="0">
+  <span id="time"></span>
+</div>
+<script type="importmap">
+  { "imports": { "three": "./node_modules/three/build/three.module.js", "three/addons/": "./node_modules/three/examples/jsm/" } }
+</script>
+<script type="module">
+  import { renderAt, W, H, LOOP } from "./scene.js";
+
+  // The scene renders at W×H and is drawn down to the output size, which
+  // smooths the edges of the small spheres and keeps the file light.
+  const params = new URLSearchParams(location.search);
+  const OUT_W = Number(params.get("width") ?? 1200);
+  // AVIF frames carry no transparency, so the rounded corners are filled with
+  // the colour of the page the banner sits on.
+  const CORNER = params.get("corner");
+  // The page the banner sits on; its lower edge fades into this colour so the
+  // steel dissolves into the README instead of ending at a hard line.
+  const PAGE = CORNER ?? (params.get("theme") === "light" ? "ffffff" : "0d1117");
+  // Overlays and type per theme: a scrim behind the words, a fade where the
+  // wires rise, and a soft edge, all in the room's own colour.
+  const INK = params.get("theme") === "light"
+    ? {
+        behind: [[0, "rgba(236,238,241,0.92)"], [0.55, "rgba(236,238,241,0.6)"], [1, "rgba(236,238,241,0)"]],
+        top: [[0, "rgba(236,238,241,0.8)"], [1, "rgba(236,238,241,0)"]],
+        edge: [[0, "rgba(246,247,249,0)"], [1, "rgba(246,247,249,0.55)"]],
+        name: "#1f2328", role: "rgba(31,35,40,0.86)", line: "rgba(60,66,75,0.8)",
+      }
+    : {
+        behind: [[0, "rgba(11,14,19,0.88)"], [0.55, "rgba(11,14,19,0.55)"], [1, "rgba(11,14,19,0)"]],
+        top: [[0, "rgba(11,14,19,0.75)"], [1, "rgba(11,14,19,0)"]],
+        edge: [[0, "rgba(5,7,10,0)"], [1, "rgba(5,7,10,0.6)"]],
+        name: "#ffffff", role: "rgba(255,255,255,0.88)", line: "rgba(226,230,238,0.72)",
+      };
+  const scale = OUT_W / W;
+  const out = document.getElementById("out");
+  out.width = OUT_W;
+  out.height = Math.round(H * scale);
+  const ctx = out.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+
+  const face = new FontFace("Schibsted", "url(fonts/schibsted-grotesk.woff2)", { weight: "400 900" });
+  document.fonts.add(await face.load());
+
+  function text(str, x, y, { size, weight, color, tracking = 0 }) {
+    ctx.font = `${weight} ${size}px Schibsted`;
+    ctx.letterSpacing = `${tracking}px`;
+    ctx.fillStyle = color;
+    ctx.fillText(str, x, y);
+  }
+
+  function shade(gradient, stops) {
+    stops.forEach(([at, color]) => gradient.addColorStop(at, color));
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function draw(t) {
+    const gl = renderAt(t);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, out.width, out.height);
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    if (CORNER) {
+      ctx.fillStyle = `#${CORNER}`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(0, 0, W, H, 28);
+    ctx.clip();
+    ctx.drawImage(gl, 0, 0, W, H);
+    // darken behind the words, let the wires dissolve upward, and close the edges
+    shade(ctx.createLinearGradient(0, 0, W * 0.58, 0), INK.behind);
+    shade(ctx.createLinearGradient(0, 0, 0, H * 0.42), INK.top);
+    shade(ctx.createRadialGradient(W * 0.6, H * 0.5, H * 0.4, W * 0.55, H * 0.5, W * 0.65), INK.edge);
+    const [pr, pg, pb] = PAGE.match(/../g).map((h) => parseInt(h, 16));
+    shade(ctx.createLinearGradient(0, H * 0.52, 0, H), [[0, 0], [0.35, 0.16], [0.62, 0.5], [0.84, 0.86], [1, 1]].map(([at, a]) => [at, `rgba(${pr},${pg},${pb},${a})`]));
+    text("Alen Philip George", 96, 282, { size: 72, weight: 700, color: INK.name, tracking: -1.8 });
+    text("AI Product Engineer", 98, 336, { size: 30, weight: 500, color: INK.role, tracking: -0.3 });
+    text("I build AI products from 0 → 1, turning ambiguous", 98, 412, { size: 24, weight: 400, color: INK.line });
+    text("problems into production systems that actually work.", 98, 445, { size: 24, weight: 400, color: INK.line });
+    ctx.restore();
+  }
+
+  // Recorder entry point: draw one frame at time t and hand back a lossless PNG.
+  window.frame = (t) => {
+    draw(t);
+    return out.toDataURL("image/png");
+  };
+
+  const scrub = document.getElementById("scrub");
+  const label = document.getElementById("time");
+  const button = document.getElementById("play");
+  scrub.max = LOOP;
+  let playing = !new URLSearchParams(location.search).has("still");
+  let t = 0;
+  let last = performance.now();
+  button.textContent = playing ? "Pause" : "Play";
+  button.onclick = () => {
+    playing = !playing;
+    button.textContent = playing ? "Pause" : "Play";
+    last = performance.now();
+  };
+  scrub.oninput = () => {
+    t = Number(scrub.value);
+    draw(t);
+  };
+  window.show = (at) => {
+    playing = false;
+    t = at;
+    draw(t);
+  };
+  function tick(now) {
+    if (playing) {
+      t = (t + (now - last) / 1000) % LOOP;
+      scrub.value = t;
+      draw(t);
+    }
+    label.textContent = `${t.toFixed(2)}s`;
+    last = now;
+    requestAnimationFrame(tick);
+  }
+  draw(0);
+  window.ready = true;
+  requestAnimationFrame(tick);
+</script>

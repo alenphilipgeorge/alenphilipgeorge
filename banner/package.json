@@ -1,0 +1,13 @@
+{
+  "name": "profile-banner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.58.2",
+    "simple-icons": "16.36.0",
+    "three": "0.178.0"
+  }
+}
