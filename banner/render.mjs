@@ -1,8 +1,8 @@
 // Renders the README's images with headless Chromium, once per GitHub theme:
 //   ../assets/banner-{dark,light}.avif  steps scene.html through its loop, saves
 //       each frame as a PNG and encodes a looping AVIF (ffmpeg + libsvtav1)
-//   ../assets/tools-{dark,light}.png    draws the stack in tools.mjs as chips
-//   node render.mjs [--only banner|tools] [--fps 30] [--width 1200] [--crf 34]
+//   ../assets/tools-{dark,light}.avif   draws the stack in tools.mjs as chips
+//   node render.mjs [--only banner|tools] [--fps 24] [--width 1200] [--crf 43]
 import { createServer } from "node:http";
 import { mkdir, readFile, rm, writeFile, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -15,11 +15,11 @@ import { TOOLS } from "./tools.mjs";
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((pairs, arg, i, all) => (arg.startsWith("--") ? [...pairs, [arg.slice(2), all[i + 1]]] : pairs), []),
 );
-const FPS = Number(args.fps ?? 30);
+const FPS = Number(args.fps ?? 24);
 const WIDTH = Number(args.width ?? 1200);
-const CRF = Number(args.crf ?? 34);
-// GitHub's page colour per theme. AVIF frames carry no transparency, so the
-// banner's rounded corners are filled with the page it sits on.
+const CRF = Number(args.crf ?? 43);
+// GitHub's page colour per theme. AVIF carries no transparency here, so both
+// images are drawn on the page they sit on.
 const PAGE = { dark: "0d1117", light: "ffffff" };
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -45,10 +45,13 @@ async function renderBanner(browser, origin, theme) {
   }
   await page.close();
 
+  // Full colour range, so the page colour survives encoding exactly and the
+  // image edge doesn't show as a faint box on the page.
   const target = join(assets, `banner-${theme}.avif`);
   execFileSync("ffmpeg", [
     "-y", "-loglevel", "error",
     "-framerate", String(FPS), "-i", join(frames, "%04d.png"),
+    "-vf", "scale=out_range=full", "-color_range", "pc",
     "-c:v", "libsvtav1", "-crf", String(CRF), "-preset", "4", "-pix_fmt", "yuv420p10le",
     "-g", String(count), "-loop", "0",
     target,
@@ -90,8 +93,8 @@ function visible(hex, on) {
   return `#${rgb.map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
-// Chip and label colours per GitHub theme; the card itself is transparent so
-// it sits on whichever page colour the viewer has.
+// Chip and label colours per GitHub theme; the card has no box of its own and
+// is drawn on the page colour, so the chips look native to the README.
 const TOOL_THEMES = {
   dark: { label: "#8b93a1", rule: "#1d232d", chipBase: "#10141b", text: "#f1f3f6", tint: 14, edge: 48, ink: 28 },
   light: { label: "#59636e", rule: "#d8dee4", chipBase: "#ffffff", text: "#1f2328", tint: 9, edge: 42, ink: 45 },
@@ -115,7 +118,7 @@ async function renderTools(browser, theme) {
   await page.setContent(`<!doctype html><meta charset="utf-8"><style>
     @font-face { font-family: "Schibsted"; font-weight: 400 900; src: url(data:font/woff2;base64,${font}) format("woff2"); }
     * { box-sizing: border-box; margin: 0; }
-    html, body { background: transparent; width: 1200px; }
+    html, body { background: #${PAGE[theme]}; width: 1200px; }
     .card { padding: 6px 4px 10px; font-family: "Schibsted", system-ui, sans-serif; }
     section { display: grid; grid-template-columns: 190px 1fr; gap: 18px; padding: 16px 0; border-top: 1px solid ${t.rule}; }
     section:first-child { border-top: 0; padding-top: 4px; }
@@ -129,11 +132,13 @@ async function renderTools(browser, theme) {
     .chip i { width: 9px; height: 9px; margin: 0 2px 0 3px; border-radius: 50%; background: var(--c); flex: none; }
   </style><div class="card">${rows}</div>`);
   await page.evaluate(() => document.fonts.ready);
-  // PNG keeps the transparent background, which AVIF here cannot, so the
-  // chips sit on whatever page colour the viewer's theme uses.
-  const target = join(assets, `tools-${theme}.png`);
-  await page.locator(".card").screenshot({ path: target, omitBackground: true });
+  await mkdir(join(here, ".frames"), { recursive: true });
+  const png = join(here, ".frames", `tools-${theme}.png`);
+  await page.locator(".card").screenshot({ path: png });
   await page.close();
+  // A still AVIF is a fraction of the PNG's size with the text just as sharp.
+  const target = join(assets, `tools-${theme}.avif`);
+  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", png, "-frames:v", "1", "-vf", "scale=out_range=full", "-color_range", "pc", "-c:v", "libsvtav1", "-crf", "22", "-preset", "4", "-pix_fmt", "yuv420p10le", "-f", "avif", target]);
   const { size } = await stat(target);
   const count = TOOLS.reduce((n, [, tools]) => n + tools.length, 0);
   console.log(`tools-${theme}: ${count} tools in ${TOOLS.length} groups, ${(size / 1e3).toFixed(0)} KB`);
